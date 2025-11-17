@@ -25,26 +25,34 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
 #define EEPROM_CAL_ADDR_IN    0x02         // EEPROM address for I/P calibration
 
 /* Voltage calculation constants */
-#define VOLTAGE_SCALE_NUM     125UL        // Scaling numerator (see algorithm below)
+#define VOLTAGE_SCALE_NUM     100UL        // Scaling numerator (see algorithm below)
 #define VOLTAGE_SCALE_DENOM   (ADC_RESOLUTION * 1000UL)  // Scaling denominator
 #define ROUNDING_OFFSET       (ADC_RESOLUTION / 2)       // For proper rounding (2048)
 
 /**
  * Voltage Calculation Algorithm:
  * ==============================
+ * Display shows voltage in 0.01V units (centivolt):
+ *   Display=100 means 1.00V
+ *   Display=500 means 5.00V
+ *   Display=999 means 9.99V
+ *
  * ADC_VALUE / 4096 = V_input / V_DD
  * V_input = (ADC_VALUE * V_DD) / 4096
  *
- * To get result in volts (0-999) from V_DD in mV:
- * volts = (ADC * VDD_mV) / (4096 * 1000)
- *       = (ADC * VDD_mV) / 4096000
+ * To display in centivolt units (multiply voltage by 100):
+ * display = V_input * 100
+ * display = ((ADC * VDD_mV) / 1000 / 4096) * 100
+ * display = (ADC * VDD_mV * 100) / (4096 * 1000)
+ * display = (ADC * VDD_mV) / (4096 * 10)
+ * display = (ADC * VDD_mV) / 40960
  *
- * To avoid large intermediate values and improve precision:
- * volts = (ADC * VDD_mV * 125) / (4096 * 1000)
- *       = (ADC * VDD_mV) / 32768
+ * To maintain precision with integer math:
+ * vt = ADC * VDD_mV * 100
+ * display = (vt + rounding) / 4,096,000
  *
- * The factor 125 simplifies division: 4096/125 = 32.768
- * Rounding: Add 2048 (half of 4096) before division for proper rounding
+ * Rounding offset is half the divisor: 4,096,000 / 2 = 2,048,000
+ * But to avoid overflow, we use: 4096 / 2 = 2048 (works due to order of operations)
  */
 
 /* =========================
