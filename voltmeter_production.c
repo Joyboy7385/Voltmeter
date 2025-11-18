@@ -422,22 +422,45 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
     /* Apply Exponential Moving Average (EMA) filter for smooth, stable readings
      * EMA formula: filtered = (alpha * new_value) + ((1-alpha) * old_value)
-     * Using alpha = 0.25 (1/4) for slower response with better stability
-     * This provides strong noise rejection for AC voltage measurement
-     * Formula: filtered = (1 * new + 3 * old) / 4
+     * Using alpha = 0.125 (1/8) for very slow response with maximum stability
+     * This provides very strong noise rejection for AC voltage measurement
+     * Formula: filtered = (1 * new + 7 * old) / 8
      */
     if (!ema_initialized[channel]) {
         /* First reading - initialize filter with current value */
         ema_filtered[channel] = volts;
         ema_initialized[channel] = 1;
     } else {
-        /* EMA filter: 25% new value + 75% old value
-         * Using fixed-point math: (new + 3*old) / 4
+        /* EMA filter: 12.5% new value + 87.5% old value
+         * Using fixed-point math: (new + 7*old) / 8
+         * This stronger filter eliminates unit digit fluctuations
          */
-        ema_filtered[channel] = (volts + (ema_filtered[channel] * 3)) >> 2;
+        ema_filtered[channel] = (volts + (ema_filtered[channel] * 7)) >> 3;
     }
 
-    return ema_filtered[channel];
+    /* Apply hysteresis to prevent single-digit flickering
+     * Only update display value if change is > 2V
+     * This creates a "dead band" for small fluctuations
+     */
+    {
+        static unsigned int last_display[2] = {0, 0};
+        unsigned int filtered = ema_filtered[channel];
+        int diff;
+
+        if (!last_display[channel]) {
+            /* First time - initialize */
+            last_display[channel] = filtered;
+        }
+
+        diff = (int)filtered - (int)last_display[channel];
+
+        /* Only update if difference exceeds hysteresis threshold (±2V) */
+        if (diff > 2 || diff < -2) {
+            last_display[channel] = filtered;
+        }
+
+        return last_display[channel];
+    }
 }
 
 
