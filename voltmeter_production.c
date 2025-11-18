@@ -45,18 +45,32 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
 #define VOLTAGE_SCALE_DENOM   (ADC_RESOLUTION * 1000UL)  // Scaling denominator = 4,096,000
 #define ROUNDING_OFFSET       (VOLTAGE_SCALE_DENOM / 2)  // For proper rounding = 2,048,000
 
+/* Hardware voltage divider compensation for 220V mains measurement
+ * Hardware divider scales 220V down to ~3.7V for ADC input
+ * Measured ratio: 220V / 85 display units ≈ 2.59
+ * Fixed-point representation: multiply by 259, divide by 100
+ */
+#define VOLTAGE_MULTIPLIER_NUM    259UL    // Multiplier numerator (2.59 * 100)
+#define VOLTAGE_MULTIPLIER_DENOM  100UL    // Multiplier denominator
+
 /* Security constants */
 #define FIRMWARE_VERSION      0x0100       // Version 1.0
 #define PRODUCT_ID            0x5A3C       // Unique product identifier
 
 /**
- * Voltage Calculation Algorithm:
- * ==============================
- * Display shows voltage in 0.01V units (centivolt):
- *   Display=100 means 1.00V
- *   Display=500 means 5.00V
- *   Display=999 means 9.99V
+ * Voltage Calculation Algorithm (for 220V AC Mains Measurement):
+ * =================================================================
+ * Hardware voltage divider scales 220V down to ~3.7V for ADC input.
+ * After ADC conversion and VDD compensation, software applies multiplier (x2.59)
+ * to compensate for hardware divider ratio.
  *
+ * Display shows voltage in whole volts (1V units):
+ *   Display=100 means 100V
+ *   Display=220 means 220V
+ *   Display=999 means 999V (maximum)
+ *
+ * Step 1: ADC conversion and VDD compensation
+ * --------------------------------------------
  * ADC_VALUE / 4096 = V_input / V_DD
  * V_input = (ADC_VALUE * V_DD) / 4096
  *
@@ -70,6 +84,15 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
  * To maintain precision with integer math:
  * vt = ADC * VDD_mV * 100
  * display = (vt + rounding) / 4,096,000
+ *
+ * Step 2: Hardware voltage divider compensation
+ * ----------------------------------------------
+ * Actual_voltage = measured_voltage * 2.59
+ * display_actual = (display * 259) / 100
+ *
+ * Step 3: EMA filtering
+ * ---------------------
+ * filtered = (1 * new + 3 * old) / 4  [25% new, 75% old for stability]
  *
  * Rounding offset is half the divisor: 4,096,000 / 2 = 2,048,000
  * But to avoid overflow, we use: 4096 / 2 = 2048 (works due to order of operations)
@@ -315,6 +338,10 @@ static unsigned int ADC_ReadChannel(unsigned char ch)
     return result; /* 12-bit: 0..4095 */
 }
 
+/* Exponential Moving Average filter state for each channel */
+static unsigned int ema_filtered[2] = {0, 0};  /* [0]=AIN0, [1]=AIN1 */
+static unsigned char ema_initialized[2] = {0, 0};
+
 /**
  * @brief Measure VDD using internal 1.22V bandgap reference
  * @return VDD in millivolts (e.g., 5000 for 5.00V)
@@ -348,12 +375,14 @@ static unsigned int Measure_VDD_mV(void)
 }
 
 /**
- * @brief Read voltage from ADC channel with averaging
+ * @brief Read voltage from ADC channel with averaging, multiplier, and EMA filtering
  * @param channel ADC channel number (0 or 1)
- * @param samples Number of samples to average (16 recommended)
+ * @param samples Number of samples to average (32 recommended for 220V measurement)
  * @return Voltage in volts (0-999)
  *
  * @note Automatically compensates for VDD variations
+ * @note Applies hardware voltage divider compensation (x2.59 for 220V measurement)
+ * @note Uses 25% new value + 75% old value EMA filter for stable readings
  * @note See voltage calculation algorithm at top of file
  */
 static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samples)
@@ -381,11 +410,34 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
     vt = (unsigned long)avg * vdd_mV * VOLTAGE_SCALE_NUM;
     volts = (vt + ROUNDING_OFFSET) / VOLTAGE_SCALE_DENOM;
 
+    /* Apply hardware voltage divider compensation
+     * Hardware divider scales 220V to ~3.7V, ratio = 2.59
+     * volts_actual = volts_measured * 2.59
+     */
+    volts = (volts * VOLTAGE_MULTIPLIER_NUM) / VOLTAGE_MULTIPLIER_DENOM;
+
     /* Safety clamp for display range */
     if (volts > MAX_DISPLAY_VALUE)
         volts = MAX_DISPLAY_VALUE;
 
-    return volts;
+    /* Apply Exponential Moving Average (EMA) filter for smooth, stable readings
+     * EMA formula: filtered = (alpha * new_value) + ((1-alpha) * old_value)
+     * Using alpha = 0.25 (1/4) for slower response with better stability
+     * This provides strong noise rejection for AC voltage measurement
+     * Formula: filtered = (1 * new + 3 * old) / 4
+     */
+    if (!ema_initialized[channel]) {
+        /* First reading - initialize filter with current value */
+        ema_filtered[channel] = volts;
+        ema_initialized[channel] = 1;
+    } else {
+        /* EMA filter: 25% new value + 75% old value
+         * Using fixed-point math: (new + 3*old) / 4
+         */
+        ema_filtered[channel] = (volts + (ema_filtered[channel] * 3)) >> 2;
+    }
+
+    return ema_filtered[channel];
 }
 
 
@@ -498,7 +550,7 @@ static unsigned int ApplyOffset(unsigned int v, int offset)
  * @param offset_ptr Pointer to calibration offset variable
  *
  * Features:
- * - Displays live voltage reading, updated every 100ms
+ * - Displays live voltage reading, updated every 300ms for stable AC mains measurement
  * - User can press INC/DEC to enter calibration mode
  * - In cal mode: adjusts offset and extends display time
  * - Exits cal mode after 2s of no button presses
@@ -516,7 +568,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
     unsigned int idle_ms = 0;
 
     /* Initial reading and display */
-    unsigned int v = ReadAverageVoltage(channel, 16);
+    unsigned int v = ReadAverageVoltage(channel, 32);
     v = ApplyOffset(v, *offset_ptr);
     UpdateDisplayBufferForValue(v);
 
@@ -524,10 +576,10 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         /* 1ms display refresh */
         Display_Refresh_1ms(&digit);
 
-        /* Update voltage reading every 150ms for responsive stable display */
-        if (++update_tick >= 150) {
+        /* Update voltage reading every 300ms for stable display (AC mains measurement) */
+        if (++update_tick >= 300) {
             update_tick = 0;
-            v = ReadAverageVoltage(channel, 16);
+            v = ReadAverageVoltage(channel, 32);
             v = ApplyOffset(v, *offset_ptr);
             UpdateDisplayBufferForValue(v);
         }
@@ -542,7 +594,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 150; /* force immediate display update */
+            update_tick = 300; /* force immediate display update */
         }
 
         /* Handle DEC button press */
@@ -552,7 +604,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = -MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 150;
+            update_tick = 300;
         }
 
         /* Exit conditions */
