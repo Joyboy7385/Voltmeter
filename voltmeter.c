@@ -25,7 +25,7 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
 #define EEPROM_CAL_ADDR_IN    0x02         // EEPROM address for I/P calibration
 
 /* Voltage calculation constants */
-#define VOLTAGE_SCALE_NUM     100UL        // Scaling numerator (see algorithm below)
+#define VOLTAGE_SCALE_NUM     250UL        // Scaling numerator - accounts for 2:5 voltage divider (see algorithm below)
 #define VOLTAGE_SCALE_DENOM   (ADC_RESOLUTION * 1000UL)  // Scaling denominator
 #define ROUNDING_OFFSET       (ADC_RESOLUTION / 2)       // For proper rounding (2048)
 
@@ -63,7 +63,7 @@ static const unsigned char DIGIT_PAT[10] = {
     0x6D, /*5*/ 0x7D, /*6*/ 0x07, /*7*/ 0x7F, /*8*/ 0x6F  /*9*/
 };
 #define PATTERN_O    0x3F
-#define PATTERN_P    0x63
+#define PATTERN_P    0x73  /* Fixed: Added segment 'e' for proper 'P' display */
 #define PATTERN_I    0x06
 #define PATTERN_DASH 0x40
 
