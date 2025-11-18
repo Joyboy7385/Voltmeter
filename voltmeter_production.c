@@ -42,8 +42,8 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
 
 /* Voltage calculation constants */
 #define VOLTAGE_SCALE_NUM     100UL        // Scaling numerator (see algorithm below)
-#define VOLTAGE_SCALE_DENOM   (ADC_RESOLUTION * 1000UL)  // Scaling denominator
-#define ROUNDING_OFFSET       (ADC_RESOLUTION / 2)       // For proper rounding (2048)
+#define VOLTAGE_SCALE_DENOM   (ADC_RESOLUTION * 1000UL)  // Scaling denominator = 4,096,000
+#define ROUNDING_OFFSET       (VOLTAGE_SCALE_DENOM / 2)  // For proper rounding = 2,048,000
 
 /* Security constants */
 #define FIRMWARE_VERSION      0x0100       // Version 1.0
@@ -273,7 +273,8 @@ static void ADC_InitChannels(void)
 
     /* Configure ADC sampling time (ADCDLY register)
      * Higher value = longer sampling time = better accuracy
-     * 0x80 = 128 ADC clock cycles sampling time
+     * 0x80 = 128 ADC clock cycles sampling time (~64us at 2MHz ADC clock)
+     * Balanced for accuracy and speed
      */
     ADCDLY = 0x80;
 }
@@ -318,7 +319,7 @@ static unsigned int ADC_ReadChannel(unsigned char ch)
  * @brief Measure VDD using internal 1.22V bandgap reference
  * @return VDD in millivolts (e.g., 5000 for 5.00V)
  *
- * @note Uses 8x oversampling for noise reduction
+ * @note Uses 16x oversampling for good noise reduction with faster response
  * @note Bandgap reference is on ADC channel 8
  * @note Calculation: VDD = (1.22V * 4096) / ADC_reading
  */
@@ -327,13 +328,14 @@ static unsigned int Measure_VDD_mV(void)
     unsigned long sum = 0;
     unsigned int adc_bg;
     unsigned char i;
+    unsigned char samples = 16;  // Optimized for speed and accuracy
     unsigned int vdd_mV;
 
-    /* Oversample bandgap channel 8 times */
-    for (i=0; i<8; i++) {
+    /* Oversample bandgap channel for noise reduction */
+    for (i=0; i<samples; i++) {
         sum += ADC_ReadChannel(8);   // internal bandgap = 1.22V
     }
-    adc_bg = (unsigned int)(sum / 8);
+    adc_bg = (unsigned int)(sum / samples);
 
     /* Avoid divide-by-zero */
     if (adc_bg == 0)
@@ -348,7 +350,7 @@ static unsigned int Measure_VDD_mV(void)
 /**
  * @brief Read voltage from ADC channel with averaging
  * @param channel ADC channel number (0 or 1)
- * @param samples Number of samples to average (typically 8)
+ * @param samples Number of samples to average (16 recommended)
  * @return Voltage in volts (0-999)
  *
  * @note Automatically compensates for VDD variations
@@ -363,7 +365,7 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
     unsigned long vt;
     unsigned int volts;
 
-    /* Oversample ADC channel */
+    /* Oversample ADC channel for noise reduction */
     for (i=0; i<samples; i++) {
         sum += ADC_ReadChannel(channel);
     }
@@ -514,7 +516,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
     unsigned int idle_ms = 0;
 
     /* Initial reading and display */
-    unsigned int v = ReadAverageVoltage(channel, 8);
+    unsigned int v = ReadAverageVoltage(channel, 16);
     v = ApplyOffset(v, *offset_ptr);
     UpdateDisplayBufferForValue(v);
 
@@ -522,10 +524,10 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         /* 1ms display refresh */
         Display_Refresh_1ms(&digit);
 
-        /* Update voltage reading every 100ms for smooth display */
-        if (++update_tick >= 100) {
+        /* Update voltage reading every 150ms for responsive stable display */
+        if (++update_tick >= 150) {
             update_tick = 0;
-            v = ReadAverageVoltage(channel, 8);
+            v = ReadAverageVoltage(channel, 16);
             v = ApplyOffset(v, *offset_ptr);
             UpdateDisplayBufferForValue(v);
         }
@@ -540,7 +542,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 100; /* force immediate display update */
+            update_tick = 150; /* force immediate display update */
         }
 
         /* Handle DEC button press */
@@ -550,7 +552,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = -MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 100;
+            update_tick = 150;
         }
 
         /* Exit conditions */
