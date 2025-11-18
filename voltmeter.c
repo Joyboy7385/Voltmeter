@@ -179,10 +179,10 @@ static void ADC_InitChannels(void)
     ADCCON1 |= 0x01; /* Enable ADC module */
 
     /* Configure ADC sampling time (ADCDLY register)
-     * Higher value = longer sampling time = better accuracy
-     * 0x80 = 128 ADC clock cycles sampling time
+     * Higher value = longer sampling time = better accuracy and stability
+     * 0xFF = 255 ADC clock cycles sampling time (~127us at 2MHz ADC clock)
      */
-    ADCDLY = 0x80;
+    ADCDLY = 0xFF;
 }
 
 /**
@@ -225,7 +225,7 @@ static unsigned int ADC_ReadChannel(unsigned char ch)
  * @brief Measure VDD using internal 1.22V bandgap reference
  * @return VDD in millivolts (e.g., 5000 for 5.00V)
  *
- * @note Uses 8x oversampling for noise reduction
+ * @note Uses 32x oversampling for improved noise reduction and stability
  * @note Bandgap reference is on ADC channel 8
  * @note Calculation: VDD = (1.22V * 4096) / ADC_reading
  */
@@ -236,11 +236,11 @@ static unsigned int Measure_VDD_mV(void)
     unsigned char i;
     unsigned int vdd_mV;
 
-    /* Oversample bandgap channel 8 times */
-    for (i=0; i<8; i++) {
+    /* Oversample bandgap channel 32 times for better stability */
+    for (i=0; i<32; i++) {
         sum += ADC_ReadChannel(8);   // internal bandgap = 1.22V
     }
-    adc_bg = (unsigned int)(sum / 8);
+    adc_bg = (unsigned int)(sum >> 5);  /* Divide by 32 using bit shift */
 
     /* Avoid divide-by-zero */
     if (adc_bg == 0)
@@ -252,12 +252,17 @@ static unsigned int Measure_VDD_mV(void)
     return vdd_mV; // e.g., 4980 means 4.98V
 }
 
+/* Exponential Moving Average filter state for each channel */
+static unsigned int ema_filtered[2] = {0, 0};  /* [0]=AIN0, [1]=AIN1 */
+static bit ema_initialized[2] = {0, 0};
+
 /**
- * @brief Read voltage from ADC channel with averaging
+ * @brief Read voltage from ADC channel with heavy filtering for stability
  * @param channel ADC channel number (0 or 1)
- * @param samples Number of samples to average (typically 8)
+ * @param samples Number of samples to average (32 for best stability)
  * @return Voltage in volts (0-999)
  *
+ * @note Uses 32x oversampling + exponential moving average filter
  * @note Automatically compensates for VDD variations
  * @note See voltage calculation algorithm at top of file
  */
@@ -270,11 +275,11 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
     unsigned long vt;
     unsigned int volts;
 
-    /* Oversample ADC channel */
+    /* Oversample ADC channel with increased sample count */
     for (i=0; i<samples; i++) {
         sum += ADC_ReadChannel(channel);
     }
-    avg = (unsigned int)(sum / samples);
+    avg = (unsigned int)(sum >> 5);  /* Divide by 32 using bit shift */
 
     /* Measure supply voltage dynamically for VDD compensation */
     vdd_mV = Measure_VDD_mV();  // e.g., 5000 mV
@@ -290,7 +295,23 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
     if (volts > MAX_DISPLAY_VALUE)
         volts = MAX_DISPLAY_VALUE;
 
-    return volts;
+    /* Apply Exponential Moving Average (EMA) filter for smooth, stable readings
+     * EMA formula: filtered = (alpha * new_value) + ((1-alpha) * old_value)
+     * Using alpha = 0.25 (1/4) for good balance of responsiveness and stability
+     * This rejects high-frequency noise while tracking real changes
+     */
+    if (!ema_initialized[channel]) {
+        /* First reading - initialize filter with current value */
+        ema_filtered[channel] = volts;
+        ema_initialized[channel] = 1;
+    } else {
+        /* EMA filter: 25% new value + 75% old value
+         * Using fixed-point math: (new + 3*old) / 4
+         */
+        ema_filtered[channel] = (volts + (ema_filtered[channel] * 3)) >> 2;
+    }
+
+    return ema_filtered[channel];
 }
 
 
@@ -421,7 +442,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
     unsigned int idle_ms = 0;
 
     /* Initial reading and display */
-    unsigned int v = ReadAverageVoltage(channel, 8);
+    unsigned int v = ReadAverageVoltage(channel, 32);
     v = ApplyOffset(v, *offset_ptr);
     UpdateDisplayBufferForValue(v);
 
@@ -429,10 +450,12 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         /* 1ms display refresh */
         Display_Refresh_1ms(&digit);
 
-        /* Update voltage reading every 100ms for smooth display */
-        if (++update_tick >= 100) {
+        /* Update voltage reading every 200ms for stable display
+         * Longer interval allows more filtering and reduces display flicker
+         */
+        if (++update_tick >= 200) {
             update_tick = 0;
-            v = ReadAverageVoltage(channel, 8);
+            v = ReadAverageVoltage(channel, 32);
             v = ApplyOffset(v, *offset_ptr);
             UpdateDisplayBufferForValue(v);
         }
@@ -447,7 +470,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 100; /* force immediate display update */
+            update_tick = 200; /* force immediate display update */
         }
 
         /* Handle DEC button press */
@@ -457,7 +480,7 @@ static void ShowVoltageWithCalibration(unsigned char channel,
                 *offset_ptr = -MAX_CALIBRATION;
             cal_mode = 1;
             idle_ms = CAL_TIMEOUT_MS;
-            update_tick = 100;
+            update_tick = 200;
         }
 
         /* Exit conditions */
