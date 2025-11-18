@@ -446,7 +446,7 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
     {
         static unsigned int last_display[2] = {0, 0};
         static unsigned char settled_count[2] = {0, 0};
-        static bit is_settled[2] = {0, 0};
+        static unsigned char is_settled[2] = {0, 0};  /* Changed from bit array to unsigned char array for Keil C51 compatibility */
         unsigned int filtered = ema_filtered[channel];
         int diff;
 
