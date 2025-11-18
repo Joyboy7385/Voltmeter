@@ -438,9 +438,9 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
         ema_filtered[channel] = (volts + (ema_filtered[channel] * 7)) >> 3;
     }
 
-    /* Apply hysteresis to prevent single-digit flickering
-     * Only update display value if change is > 2V
-     * This creates a "dead band" for small fluctuations
+    /* Apply hysteresis to prevent sub-volt flickering
+     * Only update display value if change is >= 1V
+     * This creates a "dead band" for small fluctuations while allowing 1V increments
      */
     {
         static unsigned int last_display[2] = {0, 0};
@@ -454,8 +454,8 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
         diff = (int)filtered - (int)last_display[channel];
 
-        /* Only update if difference exceeds hysteresis threshold (±2V) */
-        if (diff > 2 || diff < -2) {
+        /* Only update if difference is >= 1V (allows 1V increments, prevents sub-1V jitter) */
+        if (diff >= 1 || diff <= -1) {
             last_display[channel] = filtered;
         }
 
