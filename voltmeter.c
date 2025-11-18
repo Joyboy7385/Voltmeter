@@ -254,7 +254,7 @@ static unsigned int Measure_VDD_mV(void)
 
 /* Exponential Moving Average filter state for each channel */
 static unsigned int ema_filtered[2] = {0, 0};  /* [0]=AIN0, [1]=AIN1 */
-static bit ema_initialized[2] = {0, 0};
+static unsigned char ema_initialized[2] = {0, 0};
 
 /**
  * @brief Read voltage from ADC channel with heavy filtering for stability
