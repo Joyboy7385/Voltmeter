@@ -377,17 +377,18 @@ static unsigned int Measure_VDD_mV(void)
 /**
  * @brief Read voltage from ADC channel with averaging, multiplier, and EMA filtering
  * @param channel ADC channel number (0 or 1)
- * @param samples Number of samples to average (32 recommended for fast 220V measurement)
+ * @param samples Number of samples to average (48 recommended for stable 220V measurement)
  * @return Voltage in volts (0-999)
  *
  * @note Automatically compensates for VDD variations
  * @note Applies hardware voltage divider compensation (x2.78 for 220V measurement)
- * @note Uses 50% new + 50% old EMA filter for fast response
- * @note Uses minimal 1V hysteresis for quick response with jitter prevention
+ * @note Uses 25% new + 75% old EMA filter for stability
+ * @note Uses 2V hysteresis for balanced stability with noise rejection
  * @note See voltage calculation algorithm at top of file
  */
 static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samples)
 {
+    // Optimized for stable 220V AC mains measurement with minimal jitter
     unsigned long sum = 0;
     unsigned char i;
     unsigned int avg;
@@ -423,25 +424,25 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
     /* Apply Exponential Moving Average (EMA) filter for smooth, stable readings
      * EMA formula: filtered = (alpha * new_value) + ((1-alpha) * old_value)
-     * Using alpha = 0.5 (1/2) for fast response with adequate stability
-     * This provides good noise rejection while maintaining fast responsiveness
-     * Formula: filtered = (1 * new + 1 * old) / 2
+     * Using alpha = 0.25 (1/4) for good stability with reasonable response
+     * This provides excellent noise rejection while maintaining reasonable responsiveness
+     * Formula: filtered = (1 * new + 3 * old) / 4
      */
     if (!ema_initialized[channel]) {
         /* First reading - initialize filter with current value */
         ema_filtered[channel] = volts;
         ema_initialized[channel] = 1;
     } else {
-        /* EMA filter: 50% new value + 50% old value
-         * Using fixed-point math: (new + old) / 2
-         * Fast response filter for customer satisfaction
+        /* EMA filter: 25% new value + 75% old value
+         * Using fixed-point math: (new + 3*old) / 4
+         * Balanced stability filter for professional display
          */
-        ema_filtered[channel] = (volts + ema_filtered[channel]) >> 1;
+        ema_filtered[channel] = (volts + (3 * ema_filtered[channel])) >> 2;
     }
 
-    /* Apply minimal hysteresis for fast response
-     * 1V threshold provides quick response while preventing jitter
-     * This allows fast tracking of real voltage changes
+    /* Apply hysteresis for balanced stability
+     * 2V threshold provides good noise rejection while preventing jitter
+     * This allows reliable tracking of real voltage changes
      */
     {
         static unsigned int last_display[2] = {0, 0};
@@ -455,8 +456,8 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
         diff = (int)filtered - (int)last_display[channel];
 
-        /* Update display if change is >= 1V (fast response threshold) */
-        if (diff >= 1 || diff <= -1) {
+        /* Update display if change is >= 2V (balanced stability threshold) */
+        if (diff >= 2 || diff <= -2) {
             last_display[channel] = filtered;
         }
 
@@ -574,13 +575,13 @@ static unsigned int ApplyOffset(unsigned int v, int offset)
  * @param offset_ptr Pointer to calibration offset variable
  *
  * Features:
- * - Displays live voltage reading, updated every 200ms for fast AC mains measurement
+ * - Displays live voltage reading, updated every 200ms for stable AC mains measurement
  * - User can press INC/DEC to enter calibration mode
  * - In cal mode: adjusts offset and extends display time
  * - Exits cal mode after 2s of no button presses
  *
  * @note Offset range is limited to +/-99 volts
- * @note Uses 32 samples per reading for fast response
+ * @note Uses 48 samples per reading for stable display
  */
 static void ShowVoltageWithCalibration(unsigned char channel,
                                        unsigned int normal_ms,
@@ -592,8 +593,8 @@ static void ShowVoltageWithCalibration(unsigned char channel,
     bit cal_mode = 0;
     unsigned int idle_ms = 0;
 
-    /* Initial reading and display with 32 samples for fast response */
-    unsigned int v = ReadAverageVoltage(channel, 32);
+    /* Initial reading and display with 48 samples for stable response */
+    unsigned int v = ReadAverageVoltage(channel, 48);
     v = ApplyOffset(v, *offset_ptr);
     UpdateDisplayBufferForValue(v);
 
@@ -601,10 +602,10 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         /* 1ms display refresh */
         Display_Refresh_1ms(&digit);
 
-        /* Update voltage reading every 200ms for fast display response (AC mains measurement) */
+        /* Update voltage reading every 200ms for stable display response (AC mains measurement) */
         if (++update_tick >= 200) {
             update_tick = 0;
-            v = ReadAverageVoltage(channel, 32);
+            v = ReadAverageVoltage(channel, 48);
             v = ApplyOffset(v, *offset_ptr);
             UpdateDisplayBufferForValue(v);
         }
