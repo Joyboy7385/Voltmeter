@@ -34,17 +34,25 @@ print_header() {
 
 # Show usage
 show_usage() {
-    echo "Usage: $0 [build_type]"
+    echo "Usage: $0 [build_type] [version]"
     echo ""
     echo "Build Types:"
     echo "  debug       - Development build (no protection)"
     echo "  production  - Production build (with protection)"
+    echo "  standard    - Standard build (EEPROM + Watchdog, no protection)"
     echo "  test        - Run automated tests"
     echo "  clean       - Clean build artifacts"
+    echo "  status      - Show current build status"
+    echo ""
+    echo "Versions:"
+    echo "  original    - Original voltmeter_production.c (default)"
+    echo "  refactored  - New refactored version with enhanced error handling"
     echo ""
     echo "Examples:"
     echo "  $0 debug"
-    echo "  $0 production"
+    echo "  $0 debug refactored"
+    echo "  $0 production refactored"
+    echo "  $0 standard refactored"
     echo "  $0 test"
     echo ""
 }
@@ -248,13 +256,99 @@ show_status() {
     echo ""
 }
 
+# Build refactored version
+build_refactored() {
+    local build_mode=$1
+    print_header
+    print_msg "Building REFACTORED version - $build_mode mode..." "$BLUE"
+    echo ""
+
+    local source="voltmeter_refactored.c"
+
+    if [ ! -f "$source" ]; then
+        print_msg "ERROR: $source not found!" "$RED"
+        exit 1
+    fi
+
+    # Show which build mode will be active
+    case "$build_mode" in
+        debug|development)
+            print_msg "Configuration: BUILD_DEVELOPMENT" "$GREEN"
+            print_msg "  - Code protection: OFF" "$GREEN"
+            print_msg "  - EEPROM: OFF" "$GREEN"
+            print_msg "  - Watchdog: OFF" "$GREEN"
+            print_msg "  - Error display: ON" "$GREEN"
+            print_msg "  - Filtering: Fast (50%/50%)" "$GREEN"
+            print_msg "  - Update rate: 150ms" "$GREEN"
+            ;;
+        standard)
+            print_msg "Configuration: BUILD_STANDARD" "$YELLOW"
+            print_msg "  - Code protection: OFF" "$YELLOW"
+            print_msg "  - EEPROM: ON" "$GREEN"
+            print_msg "  - Watchdog: ON" "$GREEN"
+            print_msg "  - Error display: OFF" "$YELLOW"
+            print_msg "  - Filtering: Balanced (50%/50%)" "$GREEN"
+            print_msg "  - Update rate: 150ms" "$GREEN"
+            ;;
+        production)
+            print_msg "Configuration: BUILD_PRODUCTION" "$RED"
+            print_msg "  - Code protection: ON" "$RED"
+            print_msg "  - EEPROM: ON" "$GREEN"
+            print_msg "  - Watchdog: ON" "$GREEN"
+            print_msg "  - Voltage multiplier: ON (x2.78)" "$GREEN"
+            print_msg "  - Filtering: Maximum stability (12.5%/87.5%)" "$GREEN"
+            print_msg "  - Update rate: 200ms" "$GREEN"
+
+            echo ""
+            print_msg "⚠️  WARNING: Code protection will be enabled!" "$RED"
+            read -p "Continue? (yes/no): " response
+            if [ "$response" != "yes" ]; then
+                print_msg "Build cancelled." "$YELLOW"
+                exit 0
+            fi
+            ;;
+    esac
+
+    echo ""
+    print_msg "✓ Refactored build configured" "$GREEN"
+    print_msg "Edit $source to select build mode, then compile in Keil" "$BLUE"
+    echo ""
+    print_msg "Next steps:" "$YELLOW"
+    echo "  1. Edit $source"
+    echo "  2. Uncomment the appropriate BUILD_xxx define"
+    echo "  3. Open Keil µVision"
+    echo "  4. Set source to: $source"
+    echo "  5. Build → Rebuild All"
+    echo "  6. Flash → Download"
+    echo ""
+}
+
 # Main script
+VERSION="${2:-original}"
+
 case "${1:-help}" in
     debug|dev|development)
-        build_debug
+        if [ "$VERSION" = "refactored" ]; then
+            build_refactored "debug"
+        else
+            build_debug
+        fi
+        ;;
+    standard)
+        if [ "$VERSION" = "refactored" ]; then
+            build_refactored "standard"
+        else
+            print_msg "Standard build only available for refactored version" "$YELLOW"
+            print_msg "Try: $0 standard refactored" "$BLUE"
+            exit 1
+        fi
         ;;
     prod|production)
-        build_production
+        if [ "$VERSION" = "refactored" ]; then
+            build_refactored "production"
+        else
+            build_production
+        fi
         ;;
     test|tests)
         run_tests
