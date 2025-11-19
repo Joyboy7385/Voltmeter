@@ -6,6 +6,11 @@
 
 bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
 
+/* Define AUXR0 SFR if not already defined in headers */
+#ifndef AUXR0
+sfr AUXR0 = 0x8E;  /* Auxiliary Register 0 - controls P2.0 reset function */
+#endif
+
 /* =========================
    Build Configuration
    ========================= */
