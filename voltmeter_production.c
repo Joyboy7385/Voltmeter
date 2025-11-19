@@ -50,7 +50,7 @@ bit BIT_TMP;   // definition for the macros in Function_define_MS51_16K_keil.h
  * Measured ratio: 220V / 85 display units ≈ 2.59
  * Fixed-point representation: multiply by 259, divide by 100
  */
-#define VOLTAGE_MULTIPLIER_NUM    259UL    // Multiplier numerator (2.59 * 100)
+#define VOLTAGE_MULTIPLIER_NUM    278UL    // Multiplier numerator (2.78 * 100) - Calibrated for actual hardware divider ratio
 #define VOLTAGE_MULTIPLIER_DENOM  100UL    // Multiplier denominator
 
 /* Security constants */
