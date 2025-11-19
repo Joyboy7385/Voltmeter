@@ -377,13 +377,13 @@ static unsigned int Measure_VDD_mV(void)
 /**
  * @brief Read voltage from ADC channel with averaging, multiplier, and EMA filtering
  * @param channel ADC channel number (0 or 1)
- * @param samples Number of samples to average (48 recommended for stable 220V measurement)
+ * @param samples Number of samples to average (64 recommended for rock-solid 220V measurement)
  * @return Voltage in volts (0-999)
  *
  * @note Automatically compensates for VDD variations
  * @note Applies hardware voltage divider compensation (x2.78 for 220V measurement)
- * @note Uses 25% new + 75% old EMA filter for stability
- * @note Uses 2V hysteresis for balanced stability with noise rejection
+ * @note Uses 12.5% new + 87.5% old EMA filter for maximum stability
+ * @note Uses 3V hysteresis for maximum stability with noise rejection
  * @note See voltage calculation algorithm at top of file
  */
 static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samples)
@@ -424,24 +424,24 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
     /* Apply Exponential Moving Average (EMA) filter for smooth, stable readings
      * EMA formula: filtered = (alpha * new_value) + ((1-alpha) * old_value)
-     * Using alpha = 0.25 (1/4) for good stability with reasonable response
-     * This provides excellent noise rejection while maintaining reasonable responsiveness
-     * Formula: filtered = (1 * new + 3 * old) / 4
+     * Using alpha = 0.125 (1/8) for maximum stability
+     * This provides excellent noise rejection with rock-solid display stability
+     * Formula: filtered = (1 * new + 7 * old) / 8
      */
     if (!ema_initialized[channel]) {
         /* First reading - initialize filter with current value */
         ema_filtered[channel] = volts;
         ema_initialized[channel] = 1;
     } else {
-        /* EMA filter: 25% new value + 75% old value
-         * Using fixed-point math: (new + 3*old) / 4
-         * Balanced stability filter for professional display
+        /* EMA filter: 12.5% new value + 87.5% old value
+         * Using fixed-point math: (new + 7*old) / 8
+         * Maximum stability filter for rock-solid professional display
          */
-        ema_filtered[channel] = (volts + (3 * ema_filtered[channel])) >> 2;
+        ema_filtered[channel] = (volts + (7 * ema_filtered[channel])) >> 3;
     }
 
-    /* Apply hysteresis for balanced stability
-     * 2V threshold provides good noise rejection while preventing jitter
+    /* Apply hysteresis for maximum stability
+     * 3V threshold provides excellent noise rejection while preventing jitter
      * This allows reliable tracking of real voltage changes
      */
     {
@@ -456,8 +456,8 @@ static unsigned int ReadAverageVoltage(unsigned char channel, unsigned char samp
 
         diff = (int)filtered - (int)last_display[channel];
 
-        /* Update display if change is >= 2V (balanced stability threshold) */
-        if (diff >= 2 || diff <= -2) {
+        /* Update display if change is >= 3V (maximum stability threshold) */
+        if (diff >= 3 || diff <= -3) {
             last_display[channel] = filtered;
         }
 
@@ -581,7 +581,7 @@ static unsigned int ApplyOffset(unsigned int v, int offset)
  * - Exits cal mode after 2s of no button presses
  *
  * @note Offset range is limited to +/-99 volts
- * @note Uses 48 samples per reading for stable display
+ * @note Uses 64 samples per reading for rock-solid display
  */
 static void ShowVoltageWithCalibration(unsigned char channel,
                                        unsigned int normal_ms,
@@ -593,8 +593,8 @@ static void ShowVoltageWithCalibration(unsigned char channel,
     bit cal_mode = 0;
     unsigned int idle_ms = 0;
 
-    /* Initial reading and display with 48 samples for stable response */
-    unsigned int v = ReadAverageVoltage(channel, 48);
+    /* Initial reading and display with 64 samples for maximum stability */
+    unsigned int v = ReadAverageVoltage(channel, 64);
     v = ApplyOffset(v, *offset_ptr);
     UpdateDisplayBufferForValue(v);
 
@@ -602,10 +602,10 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         /* 1ms display refresh */
         Display_Refresh_1ms(&digit);
 
-        /* Update voltage reading every 200ms for stable display response (AC mains measurement) */
+        /* Update voltage reading every 200ms for rock-solid display (AC mains measurement) */
         if (++update_tick >= 200) {
             update_tick = 0;
-            v = ReadAverageVoltage(channel, 48);
+            v = ReadAverageVoltage(channel, 64);
             v = ApplyOffset(v, *offset_ptr);
             UpdateDisplayBufferForValue(v);
         }
