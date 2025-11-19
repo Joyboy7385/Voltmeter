@@ -222,6 +222,81 @@ static unsigned char Is_Code_Protected(void)
 }
 #endif
 
+/* =========================
+   EEPROM Functions
+   ========================= */
+
+/**
+ * @brief Write a byte to EEPROM
+ * @param addr EEPROM address to write to
+ * @param dat Data byte to write
+ */
+static void EEPROM_Write(unsigned int addr, unsigned char dat)
+{
+    set_CHPCON_IAPEN;  /* Enable IAP */
+    IAPCN = 0x21;      /* EEPROM program */
+    IAPAL = addr;
+    IAPAH = addr >> 8;
+    IAPFD = dat;
+    set_IAPTRG_IAPGO;
+    while(CHPCON & 0x01);
+    clr_CHPCON_IAPEN;
+}
+
+/**
+ * @brief Read a byte from EEPROM
+ * @param addr EEPROM address to read from
+ * @return Data byte read from EEPROM
+ */
+static unsigned char EEPROM_Read(unsigned int addr)
+{
+    unsigned char dat;
+    set_CHPCON_IAPEN;
+    IAPCN = 0x00;      /* EEPROM read */
+    IAPAL = addr;
+    IAPAH = addr >> 8;
+    set_IAPTRG_IAPGO;
+    dat = IAPFD;
+    clr_CHPCON_IAPEN;
+    return dat;
+}
+
+/**
+ * @brief Save calibration values to EEPROM
+ *
+ * Saves both O/P and I/P calibration offsets to EEPROM with signature bytes
+ * for validation on power-up. Offset values are stored with +99 bias to
+ * handle negative values (range: -99 to +99 becomes 0 to 198).
+ */
+static void Save_Calibration(void)
+{
+    EEPROM_Write(EEPROM_CAL_ADDR_OUT, (unsigned char)(cal_offset_out + 99));
+    EEPROM_Write(EEPROM_CAL_ADDR_OUT+1, 0xA5);  /* Signature byte */
+    EEPROM_Write(EEPROM_CAL_ADDR_IN, (unsigned char)(cal_offset_in + 99));
+    EEPROM_Write(EEPROM_CAL_ADDR_IN+1, 0xA5);
+}
+
+/**
+ * @brief Load calibration values from EEPROM
+ *
+ * Restores calibration offsets from EEPROM if valid signature bytes are
+ * present. Values are validated to ensure they're within valid range.
+ * If signature is invalid, offsets remain at 0 (no calibration).
+ */
+static void Load_Calibration(void)
+{
+    if(EEPROM_Read(EEPROM_CAL_ADDR_OUT+1) == 0xA5) {
+        cal_offset_out = (int)EEPROM_Read(EEPROM_CAL_ADDR_OUT) - 99;
+        if(cal_offset_out > 99) cal_offset_out = 0;
+        if(cal_offset_out < -99) cal_offset_out = 0;
+    }
+    if(EEPROM_Read(EEPROM_CAL_ADDR_IN+1) == 0xA5) {
+        cal_offset_in = (int)EEPROM_Read(EEPROM_CAL_ADDR_IN) - 99;
+        if(cal_offset_in > 99) cal_offset_in = 0;
+        if(cal_offset_in < -99) cal_offset_in = 0;
+    }
+}
+
 /**
  * @brief Update button debounce state and detect new presses
  * @param[out] inc_press Set to 1 if INC button newly pressed
@@ -637,8 +712,10 @@ static void ShowVoltageWithCalibration(unsigned char channel,
         if (cal_mode) {
             if (idle_ms)
                 idle_ms--;
-            else
+            else {
+                Save_Calibration();  /* Save when exiting cal mode */
                 break;  /* 2s timeout - exit calibration mode */
+            }
         } else {
             if (normal_ms)
                 normal_ms--;
@@ -662,6 +739,11 @@ static void ShowVoltageWithCalibration(unsigned char channel,
  */
 static void IO_Init(void)
 {
+    /* Disable RESET function on P2.0 to use as GPIO for INC button */
+    TA = 0xAA;  /* Unlock timed access */
+    TA = 0x55;
+    AUXR0 &= ~0x04;  /* Clear bit 2 (SWRF) to disable reset on P2.0 */
+
     /* Segments P0.0..P0.6 as push-pull outputs */
     P00_PUSHPULL_MODE; P01_PUSHPULL_MODE; P02_PUSHPULL_MODE;
     P03_PUSHPULL_MODE; P04_PUSHPULL_MODE; P05_PUSHPULL_MODE;
@@ -691,6 +773,7 @@ void main(void)
     /* Initialize hardware */
     IO_Init();
     ADC_InitChannels();
+    Load_Calibration();  /* Load saved calibration values */
 
 #if ENABLE_CODE_PROTECTION
     /* Check if code protection is already enabled */
