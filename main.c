@@ -212,19 +212,24 @@ void ADC_Init_Custom(void)
     while(ADC_GetCalibrationStatus(ADC1));
 }
 
+// ADC error flag for timeout detection
+static uint8_t adc_error_flag = 0;
+
 uint16_t ADC_Read(uint8_t channel)
 {
     uint16_t timeout = 10000;
-    
+
     ADC_RegularChannelConfig(ADC1, channel, 1, ADC_SampleTime_241Cycles);
     ADC_SoftwareStartConvCmd(ADC1, ENABLE);
-    
+
     while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)) {
         if(--timeout == 0) {
-            return 0;  // Timeout protection
+            adc_error_flag = 1;  // Set error flag
+            return 0xFFFF;       // Return invalid value (max), not 0
         }
     }
-    
+
+    adc_error_flag = 0;  // Clear error on success
     return ADC_GetConversionValue(ADC1);
 }
 
@@ -282,6 +287,9 @@ float Kalman_Update(KalmanState *ks, float measurement)
     ks->k = p_pred / (p_pred + ks->r);
     ks->x = ks->x + ks->k * (measurement - ks->x);
     ks->p = (1.0f - ks->k) * p_pred;
+
+    // Prevent numeric instability - keep minimum uncertainty
+    if(ks->p < 0.001f) ks->p = 0.001f;
     
     // Smoother adaptive noise based on innovation magnitude
     float innovation = measurement - ks->x;
@@ -332,10 +340,20 @@ uint16_t ReadVoltage_Kalman(uint8_t channel)
     }
     
     // Average 16 ADC samples for noise reduction
+    uint8_t valid_samples = 0;
     for(i=0; i<16; i++) {
-        sum += ADC_Read(adc_channel);
+        uint16_t sample = ADC_Read(adc_channel);
+        if(sample != 0xFFFF) {  // Skip error readings
+            sum += sample;
+            valid_samples++;
+        }
     }
-    adc_avg = sum >> 4;
+    // Avoid division by zero, use last valid average if all failed
+    if(valid_samples > 0) {
+        adc_avg = sum / valid_samples;
+    } else {
+        adc_avg = 0;  // All readings failed
+    }
     
     voltage_raw = (float)adc_avg * actual_vdd / 1024.0f;
     voltage_raw = voltage_raw * VOLTAGE_MULTIPLIER_NUM / VOLTAGE_MULTIPLIER_DENOM;
@@ -345,19 +363,26 @@ uint16_t ReadVoltage_Kalman(uint8_t channel)
     
     // Convert to integer
     voltage_int = (uint16_t)(voltage_filtered + 0.5f);
-    
+
     if(voltage_int > MAX_DISPLAY_VALUE) voltage_int = MAX_DISPLAY_VALUE;
-    
-    // Smart display update logic
-    if(*display == 0) {
+
+    // Handle first reading initialization
+    if(!ks->initialized || (*display == 0 && voltage_int == 0)) {
         *display = voltage_int;
         *stable_count = 0;
         return *display;
     }
-    
+
     diff = (int16_t)voltage_int - (int16_t)(*display);
     if(diff < 0) diff = -diff;
-    
+
+    // Fast jump to 0 when input is disconnected (voltage near 0)
+    if(voltage_int <= 2 && *display > 10) {
+        *display = 0;
+        *stable_count = 0;
+        return *display;
+    }
+
     // Update logic based on Kalman gain (confidence)
     if(ks->k > 0.5f) {
         // High Kalman gain = big change detected, update fast
@@ -367,10 +392,10 @@ uint16_t ReadVoltage_Kalman(uint8_t channel)
         } else if(diff >= 1) {
             if(*stable_count >= 1) {
                 if(voltage_int > *display) (*display)++;
-                else (*display)--;
+                else if(*display > 0) (*display)--;  // Prevent underflow
                 *stable_count = 0;
             } else {
-                (*stable_count)++;
+                if(*stable_count < 255) (*stable_count)++;  // Prevent overflow
             }
         }
     } else {
@@ -381,16 +406,16 @@ uint16_t ReadVoltage_Kalman(uint8_t channel)
         } else if(diff >= 1) {
             if(*stable_count >= 3) {
                 if(voltage_int > *display) (*display)++;
-                else (*display)--;
+                else if(*display > 0) (*display)--;  // Prevent underflow
                 *stable_count = 0;
             } else {
-                (*stable_count)++;
+                if(*stable_count < 255) (*stable_count)++;  // Prevent overflow
             }
         } else {
             *stable_count = 0;
         }
     }
-    
+
     return *display;
 }
 
@@ -685,6 +710,8 @@ void ShowVoltageWithCalibration(uint8_t channel, uint16_t normal_ms, int16_t *of
  *===================================================================================*/
 int main(void)
 {
+    uint8_t vdd_refresh_counter = 0;
+
     SystemInit();
     Delay_Init();
     GPIO_Init_All();
@@ -700,6 +727,13 @@ int main(void)
     Delay_Ms(100);
 
     while(1) {
+        // Refresh VDD measurement every 10 cycles (~80 seconds)
+        // to compensate for supply voltage drift
+        if(++vdd_refresh_counter >= 10) {
+            vdd_refresh_counter = 0;
+            Measure_VDD();
+        }
+
         UpdateDisplay_Label('O', 'P');
         DelayWithDisplay(1000);
 
