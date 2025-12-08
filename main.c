@@ -3,6 +3,48 @@
  * Professional Voltmeter with Kalman Filter
  * For CH32V003A4M6 (RISC-V)
  * Version 2.0 - Production Ready
+ *
+ * Hardware:
+ *   - Voltage Divider: 1240K / 10K with 10uF filter
+ *   - Display: 3-digit 7-segment (Common Anode)
+ *   - Buttons: INC (PA1), DEC (PA2) with internal pull-up
+ *
+ *===================================================================================
+ * IMPORTANT: WCH-LinkUtility Option Bytes Configuration (MUST SET BEFORE PROGRAMMING)
+ *===================================================================================
+ * Open WCH-LinkUtility -> Target -> Option Bytes -> Configure as follows:
+ *
+ *   +-------------------+------------------+----------------------------------------+
+ *   | Option            | Required Setting | Reason                                 |
+ *   +-------------------+------------------+----------------------------------------+
+ *   | IWDG_SW           | Software         | Watchdog controlled by firmware        |
+ *   | RST_MODE          | DISABLED         | PD7 used as DIGIT3 GPIO (CRITICAL!)    |
+ *   | STOP_RST          | No Reset         | Optional - prevents unwanted resets    |
+ *   | STANDBY_RST       | No Reset         | Optional - prevents unwanted resets    |
+ *   | BOOT_MODE         | User Code        | Boot from main flash                   |
+ *   +-------------------+------------------+----------------------------------------+
+ *
+ * WARNING: If RST_MODE is not set to DISABLED, DIGIT3 (PD7) will NOT work!
+ *          The display will only show 2 digits instead of 3.
+ *
+ *===================================================================================
+ * Pin Assignment Summary
+ *===================================================================================
+ *   PA1 - BTN_INC (Increment button, active LOW with pull-up)
+ *   PA2 - BTN_DEC (Decrement button, active LOW with pull-up)
+ *   PC0 - SEG_G
+ *   PC1 - SEG_D
+ *   PC2 - SEG_C
+ *   PC3 - SEG_E
+ *   PC4 - ADC_INPUT (Voltage divider input)
+ *   PC6 - SEG_F
+ *   PC7 - DIGIT1 (Common anode, active HIGH)
+ *   PD1 - SEG_A
+ *   PD4 - ADC_OUTPUT (Voltage divider output)
+ *   PD5 - DIGIT2 (Common anode, active HIGH)
+ *   PD6 - SEG_B
+ *   PD7 - DIGIT3 (Common anode, active HIGH) ** Requires RST_MODE=DISABLED **
+ *
  *===================================================================================*/
 #include "debug.h"
 #include "ch32v00x_conf.h"
@@ -12,40 +54,40 @@
 /*===================================================================================
  * Hardware Pin Configuration
  *===================================================================================*/
-// Buttons
+// Buttons (directly connected to GND when pressed, internal pull-up enabled)
 #define BTN_INC_PORT    GPIOA
-#define BTN_INC_PIN     GPIO_Pin_1
+#define BTN_INC_PIN     GPIO_Pin_1      // PA1 - Increment calibration
 #define BTN_DEC_PORT    GPIOA
-#define BTN_DEC_PIN     GPIO_Pin_2
+#define BTN_DEC_PIN     GPIO_Pin_2      // PA2 - Decrement calibration
 
-// ADC Channels
-#define ADC_CH_OUTPUT   ADC_Channel_7  // PD4
-#define ADC_CH_INPUT    ADC_Channel_2  // PC4
-#define ADC_CH_VREF     ADC_Channel_8  // Internal 1.2V reference
+// ADC Channels (via voltage divider: 1240K + 10K, ratio = 125:1)
+#define ADC_CH_OUTPUT   ADC_Channel_7   // PD4 - Output voltage measurement
+#define ADC_CH_INPUT    ADC_Channel_2   // PC4 - Input voltage measurement
+#define ADC_CH_VREF     ADC_Channel_8   // Internal 1.2V reference for VDD calibration
 
-// 7-Segment pins (A-G)
+// 7-Segment pins (accent LOW to turn ON segment for common anode)
 #define SEG_A_PORT      GPIOD
-#define SEG_A_PIN       GPIO_Pin_1
+#define SEG_A_PIN       GPIO_Pin_1      // PD1 - Segment A (top)
 #define SEG_B_PORT      GPIOD
-#define SEG_B_PIN       GPIO_Pin_6
+#define SEG_B_PIN       GPIO_Pin_6      // PD6 - Segment B (top-right)
 #define SEG_C_PORT      GPIOC
-#define SEG_C_PIN       GPIO_Pin_2
+#define SEG_C_PIN       GPIO_Pin_2      // PC2 - Segment C (bottom-right)
 #define SEG_D_PORT      GPIOC
-#define SEG_D_PIN       GPIO_Pin_1
+#define SEG_D_PIN       GPIO_Pin_1      // PC1 - Segment D (bottom)
 #define SEG_E_PORT      GPIOC
-#define SEG_E_PIN       GPIO_Pin_3
+#define SEG_E_PIN       GPIO_Pin_3      // PC3 - Segment E (bottom-left)
 #define SEG_F_PORT      GPIOC
-#define SEG_F_PIN       GPIO_Pin_6
+#define SEG_F_PIN       GPIO_Pin_6      // PC6 - Segment F (top-left)
 #define SEG_G_PORT      GPIOC
-#define SEG_G_PIN       GPIO_Pin_0
+#define SEG_G_PIN       GPIO_Pin_0      // PC0 - Segment G (middle)
 
-// Digit select (active HIGH for common anode)
+// Digit select (active HIGH to enable digit for common anode display)
 #define DIGIT1_PORT     GPIOC
-#define DIGIT1_PIN      GPIO_Pin_7
+#define DIGIT1_PIN      GPIO_Pin_7      // PC7 - Digit 1 (hundreds)
 #define DIGIT2_PORT     GPIOD
-#define DIGIT2_PIN      GPIO_Pin_5
+#define DIGIT2_PIN      GPIO_Pin_5      // PD5 - Digit 2 (tens)
 #define DIGIT3_PORT     GPIOD
-#define DIGIT3_PIN      GPIO_Pin_7
+#define DIGIT3_PIN      GPIO_Pin_7      // PD7 - Digit 3 (ones) ** RST pin - must disable in Option Bytes! **
 
 /*===================================================================================
  * Configuration Constants (No Magic Numbers)
