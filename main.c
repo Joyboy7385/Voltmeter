@@ -49,7 +49,7 @@
  * Configuration
  *===================================================================================*/
 #define MAX_DISPLAY_VALUE     999
-#define DEBOUNCE_MS           20
+#define DEBOUNCE_COUNTS       10   // Called every ~2ms, so 10 counts = 20ms debounce
 #define MAX_CALIBRATION       99
 #define CAL_TIMEOUT_MS        2000
 
@@ -497,7 +497,7 @@ void Buttons_Update(uint8_t *inc_press, uint8_t *dec_press)
 
     raw = GPIO_ReadInputDataBit(BTN_INC_PORT, BTN_INC_PIN);
     if(raw != inc_stable) {
-        if(++inc_cnt >= DEBOUNCE_MS) {
+        if(++inc_cnt >= DEBOUNCE_COUNTS) {
             inc_stable = raw;
             inc_cnt = 0;
             if(inc_stable == 0) *inc_press = 1;
@@ -508,7 +508,7 @@ void Buttons_Update(uint8_t *inc_press, uint8_t *dec_press)
 
     raw = GPIO_ReadInputDataBit(BTN_DEC_PORT, BTN_DEC_PIN);
     if(raw != dec_stable) {
-        if(++dec_cnt >= DEBOUNCE_MS) {
+        if(++dec_cnt >= DEBOUNCE_COUNTS) {
             dec_stable = raw;
             dec_cnt = 0;
             if(dec_stable == 0) *dec_press = 1;
