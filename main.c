@@ -62,7 +62,7 @@
  */
 #define FLASH_CAL_PAGE_BASE   ((uint32_t)0x00003C00)
 
-/* We¡¯ll store 2 words:
+/* Weï¿½ï¿½ll store 2 words:
  * [0] = cal_out (low 16 bits) + cal_in (high 16 bits)
  * [1] = magic number for validity check
  */
@@ -175,10 +175,14 @@ void GPIO_Init_All(void)
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;  // PD4
     GPIO_Init(GPIOD, &GPIO_InitStructure);
     
-    // All segments and digits off initially
-    GPIO_SetBits(GPIOD, SEG_A_PIN | SEG_B_PIN );
-    GPIO_SetBits(GPIOC, SEG_C_PIN | SEG_D_PIN | SEG_G_PIN | SEG_E_PIN | SEG_F_PIN | DIGIT1_PIN);
-    GPIO_SetBits(GPIOD, DIGIT2_PIN | DIGIT3_PIN);
+    // All segments off initially (HIGH = segment OFF for common anode)
+    GPIO_SetBits(GPIOD, SEG_A_PIN | SEG_B_PIN);
+    GPIO_SetBits(GPIOC, SEG_C_PIN | SEG_D_PIN | SEG_G_PIN | SEG_E_PIN | SEG_F_PIN);
+
+    // All digits off initially (LOW = digit OFF for common anode)
+    GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
+    GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
+    GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
 }
 
 /*===================================================================================
@@ -424,21 +428,21 @@ void UpdateDisplay_Label(char first, char second)
 
 void Display_Refresh(uint8_t *digit_idx)
 {
-    // Turn off all digits
-    GPIO_SetBits(DIGIT1_PORT, DIGIT1_PIN);
-    GPIO_SetBits(DIGIT2_PORT, DIGIT2_PIN);
-    GPIO_SetBits(DIGIT3_PORT, DIGIT3_PIN);
-    
+    // Turn off all digits (LOW = OFF for common anode)
+    GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
+    GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
+    GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
+
     // Set segment pattern
     SetSegment(segPattern[*digit_idx]);
-    
-    // Turn on current digit
-    if(*digit_idx == 0) GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
-    else if(*digit_idx == 1) GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
-    else GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
-    
+
+    // Turn on current digit (HIGH = ON for common anode)
+    if(*digit_idx == 0) GPIO_SetBits(DIGIT1_PORT, DIGIT1_PIN);
+    else if(*digit_idx == 1) GPIO_SetBits(DIGIT2_PORT, DIGIT2_PIN);
+    else GPIO_SetBits(DIGIT3_PORT, DIGIT3_PIN);
+
     Delay_Us(2000);
-    
+
     (*digit_idx)++;
     if(*digit_idx > 2) *digit_idx = 0;
 }
@@ -446,7 +450,7 @@ void Display_Refresh(uint8_t *digit_idx)
 void DelayWithDisplay(uint16_t ms)
 {
     uint8_t d = 0;
-    uint16_t cycles = (ms+5) / 6;  // Each refresh is ~2ms per digit ¡Á 3 digits
+    uint16_t cycles = (ms+5) / 6;  // Each refresh is ~2ms per digit ï¿½ï¿½ 3 digits
     uint16_t i;
 
    if(cycles==0) cycles=1;
@@ -525,7 +529,7 @@ void Save_Calibration(void)
                     FLASH_FLAG_WRPRTERR);
 
     /* Erase the 1K page containing our data */
-    status = FLASH_ErasePage(FLASH_CAL_PAGE_BASE);  // ¡û CHECK RETURN VALUE
+    status = FLASH_ErasePage(FLASH_CAL_PAGE_BASE);  // ï¿½ï¿½ CHECK RETURN VALUE
     if(status != FLASH_COMPLETE) {
         FLASH_Lock();
         // Optional: Show error on display
@@ -534,13 +538,13 @@ void Save_Calibration(void)
     }
 
     /* Program the two 32-bit words */
-    status = FLASH_ProgramWord(FLASH_CAL_ADDR, word_offsets);  // ¡û CHECK THIS
+    status = FLASH_ProgramWord(FLASH_CAL_ADDR, word_offsets);  // ï¿½ï¿½ CHECK THIS
     if(status != FLASH_COMPLETE) {
         FLASH_Lock();
         return;
     }
 
-    status = FLASH_ProgramWord(FLASH_CAL_MAGIC_ADDR, word_magic);  // ¡û AND THIS
+    status = FLASH_ProgramWord(FLASH_CAL_MAGIC_ADDR, word_magic);  // ï¿½ï¿½ AND THIS
     if(status != FLASH_COMPLETE) {
         FLASH_Lock();
         return;
@@ -679,24 +683,23 @@ void ShowVoltageWithCalibration(uint8_t channel, uint16_t normal_ms, int16_t *of
 /*===================================================================================
  * Main Function
  *===================================================================================*/
-/*int main(void)
+int main(void)
 {
     SystemInit();
     Delay_Init();
     GPIO_Init_All();
     ADC_Init_Custom();
     Measure_VDD();
+
     // Initialize Kalman filters
     Kalman_Init(&kalman_out);
     Kalman_Init(&kalman_in);
-    //IWDG_Init(); 
-    
+
     Load_Calibration();
-    
+
     Delay_Ms(100);
 
     while(1) {
-        //IWDG_ReloadCounter();  // ¡û FEED DOG INSIDE LOOP!
         UpdateDisplay_Label('O', 'P');
         DelayWithDisplay(1000);
 
@@ -707,24 +710,6 @@ void ShowVoltageWithCalibration(uint8_t channel, uint16_t normal_ms, int16_t *of
 
         ShowVoltageWithCalibration(1, 3000, &cal_offset_in);
     }
- return 0;
-}*/
 
-int main(void)
-{
-    SystemInit();
-    Delay_Init();        // CRITICAL - was missing!
-    GPIO_Init_All();
-   
-    // Simple test - just show "123" forever
-    segPattern[0] = DIGIT_PAT[1];  // "1"
-    segPattern[1] = DIGIT_PAT[2];  // "2"
-    segPattern[2] = DIGIT_PAT[3];  // "3"
-   
-    uint8_t d = 0;
-    while(1) {
-        Display_Refresh(&d);
-    }
-   
     return 0;
 }
