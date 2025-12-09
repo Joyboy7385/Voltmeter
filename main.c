@@ -6,7 +6,7 @@
  *
  * Hardware:
  *   - Voltage Divider: 1240K / 10K with 10uF filter
- *   - Display: 3-digit 7-segment (Common Anode)
+ *   - Display: 3-digit 7-segment (Common Cathode)
  *   - Buttons: INC (PA1), DEC (PA2) with internal pull-up
  *
  *===================================================================================
@@ -65,7 +65,7 @@
 #define ADC_CH_INPUT    ADC_Channel_2   // PC4 - Input voltage measurement
 #define ADC_CH_VREF     ADC_Channel_8   // Internal 1.2V reference for VDD calibration
 
-// 7-Segment pins (accent LOW to turn ON segment for common anode)
+// 7-Segment pins (HIGH to turn ON segment for common cathode)
 #define SEG_A_PORT      GPIOD
 #define SEG_A_PIN       GPIO_Pin_1      // PD1 - Segment A (top)
 #define SEG_B_PORT      GPIOD
@@ -81,7 +81,7 @@
 #define SEG_G_PORT      GPIOC
 #define SEG_G_PIN       GPIO_Pin_0      // PC0 - Segment G (middle)
 
-// Digit select (active HIGH to enable digit for common anode display)
+// Digit select (active LOW to enable digit for common cathode display)
 #define DIGIT1_PORT     GPIOC
 #define DIGIT1_PIN      GPIO_Pin_7      // PC7 - Digit 1 (hundreds)
 #define DIGIT2_PORT     GPIOD
@@ -148,7 +148,7 @@
 #define IWDG_RELOAD_VALUE       0xFFF   // ~1.6 seconds timeout
 
 /*===================================================================================
- * 7-Segment Patterns (Common Anode - active LOW segments)
+ * 7-Segment Patterns (Common Cathode - active HIGH segments)
  *===================================================================================*/
 static const uint8_t DIGIT_PAT[10] = {
     0x3F, // 0: ABCDEF
@@ -320,14 +320,14 @@ void GPIO_Init_All(void)
     GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;  // PD4
     GPIO_Init(GPIOD, &GPIO_InitStructure);
 
-    // Initialize all segments OFF (HIGH for common anode)
-    GPIO_SetBits(GPIOD, SEG_A_PIN | SEG_B_PIN);
-    GPIO_SetBits(GPIOC, SEG_C_PIN | SEG_D_PIN | SEG_G_PIN | SEG_E_PIN | SEG_F_PIN);
+    // Initialize all segments OFF (LOW for common cathode)
+    GPIO_ResetBits(GPIOD, SEG_A_PIN | SEG_B_PIN);
+    GPIO_ResetBits(GPIOC, SEG_C_PIN | SEG_D_PIN | SEG_G_PIN | SEG_E_PIN | SEG_F_PIN);
 
-    // Initialize all digits OFF (LOW for common anode)
-    GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
-    GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
-    GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
+    // Initialize all digits OFF (HIGH for common cathode)
+    GPIO_SetBits(DIGIT1_PORT, DIGIT1_PIN);
+    GPIO_SetBits(DIGIT2_PORT, DIGIT2_PIN);
+    GPIO_SetBits(DIGIT3_PORT, DIGIT3_PIN);
 }
 
 /*===================================================================================
@@ -605,14 +605,14 @@ uint16_t ReadVoltage_Kalman(uint8_t channel)
  *===================================================================================*/
 void SetSegment(uint8_t pattern)
 {
-    // For common anode: LOW = segment ON, HIGH = segment OFF
-    GPIO_WriteBit(SEG_A_PORT, SEG_A_PIN, (pattern & 0x01) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_B_PORT, SEG_B_PIN, (pattern & 0x02) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_C_PORT, SEG_C_PIN, (pattern & 0x04) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_D_PORT, SEG_D_PIN, (pattern & 0x08) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_E_PORT, SEG_E_PIN, (pattern & 0x10) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_F_PORT, SEG_F_PIN, (pattern & 0x20) ? Bit_RESET : Bit_SET);
-    GPIO_WriteBit(SEG_G_PORT, SEG_G_PIN, (pattern & 0x40) ? Bit_RESET : Bit_SET);
+    // For common cathode: HIGH = segment ON, LOW = segment OFF
+    GPIO_WriteBit(SEG_A_PORT, SEG_A_PIN, (pattern & 0x01) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_B_PORT, SEG_B_PIN, (pattern & 0x02) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_C_PORT, SEG_C_PIN, (pattern & 0x04) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_D_PORT, SEG_D_PIN, (pattern & 0x08) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_E_PORT, SEG_E_PIN, (pattern & 0x10) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_F_PORT, SEG_F_PIN, (pattern & 0x20) ? Bit_SET : Bit_RESET);
+    GPIO_WriteBit(SEG_G_PORT, SEG_G_PIN, (pattern & 0x40) ? Bit_SET : Bit_RESET);
 }
 
 void UpdateDisplay_Value(uint16_t value)
@@ -652,18 +652,18 @@ void UpdateDisplay_Overload(void)
 
 void Display_Refresh(uint8_t *digit_idx)
 {
-    // Turn off all digits (LOW = OFF for common anode)
-    GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
-    GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
-    GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
+    // Turn off all digits (HIGH = OFF for common cathode)
+    GPIO_SetBits(DIGIT1_PORT, DIGIT1_PIN);
+    GPIO_SetBits(DIGIT2_PORT, DIGIT2_PIN);
+    GPIO_SetBits(DIGIT3_PORT, DIGIT3_PIN);
 
     // Set segment pattern
     SetSegment(segPattern[*digit_idx]);
 
-    // Turn on current digit (HIGH = ON for common anode)
-    if(*digit_idx == 0) GPIO_SetBits(DIGIT1_PORT, DIGIT1_PIN);
-    else if(*digit_idx == 1) GPIO_SetBits(DIGIT2_PORT, DIGIT2_PIN);
-    else GPIO_SetBits(DIGIT3_PORT, DIGIT3_PIN);
+    // Turn on current digit (LOW = ON for common cathode)
+    if(*digit_idx == 0) GPIO_ResetBits(DIGIT1_PORT, DIGIT1_PIN);
+    else if(*digit_idx == 1) GPIO_ResetBits(DIGIT2_PORT, DIGIT2_PIN);
+    else GPIO_ResetBits(DIGIT3_PORT, DIGIT3_PIN);
 
     Delay_Us(2000);
 
