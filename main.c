@@ -27,6 +27,10 @@
  * WARNING: If RST_MODE is not set to DISABLED, DIGIT3 (PD7) will NOT work!
  *          The display will only show 2 digits instead of 3.
  *
+ * NOTE: This firmware disables the SDI (Serial Debug Interface) at runtime to
+ *       release PD1 for use as SEG_A. After programming, the WCH-Link debugger
+ *       may not be able to connect until the chip is power-cycled or reset.
+ *
  *===================================================================================
  * Pin Assignment Summary
  *===================================================================================
@@ -65,7 +69,7 @@
 #define ADC_CH_INPUT    ADC_Channel_2   // PC4 - Input voltage measurement
 #define ADC_CH_VREF     ADC_Channel_8   // Internal 1.2V reference for VDD calibration
 
-// 7-Segment pins (accent LOW to turn ON segment for common anode)
+// 7-Segment pins (LOW to turn ON segment for common anode)
 #define SEG_A_PORT      GPIOD
 #define SEG_A_PIN       GPIO_Pin_1      // PD1 - Segment A (top)
 #define SEG_B_PORT      GPIOD
@@ -278,14 +282,20 @@ void GPIO_Init_All(void)
 {
     GPIO_InitTypeDef GPIO_InitStructure = {0};
 
-    // Enable peripheral clocks
+    // Enable peripheral clocks (including AFIO for pin remapping)
     RCC_APB2PeriphClockCmd(
         RCC_APB2Periph_GPIOA |
         RCC_APB2Periph_GPIOC |
         RCC_APB2Periph_GPIOD |
+        RCC_APB2Periph_AFIO |
         RCC_APB2Periph_ADC1,
         ENABLE
     );
+
+    // CRITICAL: Disable SDI (Serial Debug Interface) to release PD1 for GPIO use
+    // Without this, PD1 (SEG_A) remains stuck as SWDIO debug pin
+    // WARNING: After this, you can only reprogram via BOOT0 pin or power-cycle reset
+    GPIO_PinRemapConfig(GPIO_Remap_SDI_Disable, ENABLE);
 
     // Buttons as input with pull-up
     GPIO_InitStructure.GPIO_Pin = BTN_INC_PIN | BTN_DEC_PIN;
