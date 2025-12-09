@@ -129,15 +129,16 @@
 #define FLASH_CAL_MAGIC         ((uint32_t)0xCAFEBABE)
 
 // Kalman filter constants (fixed-point scaled by 1000)
-#define KALMAN_P_INIT           100000  // Initial uncertainty (100.0)
-#define KALMAN_P_RESET          10000   // Reset uncertainty (10.0)
+#define KALMAN_P_INIT           10000   // Initial uncertainty (10.0) - reduced to prevent overflow
+#define KALMAN_P_RESET          5000    // Reset uncertainty (5.0)
 #define KALMAN_P_MIN            1       // Minimum P (0.001)
+#define KALMAN_P_MAX            50000   // Maximum P to prevent overflow
 #define KALMAN_Q_STABLE         10      // Process noise stable (0.01)
 #define KALMAN_Q_MEDIUM         50      // Process noise medium (0.05)
 #define KALMAN_Q_FAST           200     // Process noise fast (0.2)
-#define KALMAN_R                500     // Measurement noise (0.5)
-#define KALMAN_INNOVATION_HIGH  20000   // 20.0 threshold
-#define KALMAN_INNOVATION_MED   5000    // 5.0 threshold
+#define KALMAN_R                1000    // Measurement noise (1.0) - increased for stability
+#define KALMAN_INNOVATION_HIGH  5000    // 5V threshold (in mV)
+#define KALMAN_INNOVATION_MED   2000    // 2V threshold (in mV)
 
 // Display update thresholds
 #define DIFF_JUMP_THRESHOLD     5       // Jump directly if diff >= 5
@@ -257,6 +258,7 @@ uint16_t ApplyOffset(uint16_t v, int16_t offset);
 void ShowVoltageWithCalibration(uint8_t channel, uint16_t normal_ms, int16_t *offset_ptr);
 void IWDG_Init(void);
 void IWDG_Feed(void);
+void Display_Test(void);
 
 /*===================================================================================
  * Watchdog Timer Functions
@@ -346,8 +348,9 @@ void GPIO_Init_All(void)
 void ADC_Init_Custom(void)
 {
     ADC_InitTypeDef ADC_InitStructure = {0};
+    uint16_t timeout;
 
-    RCC_ADCCLKConfig(RCC_PCLK2_Div8);  // ADC clock = 24MHz/8 = 3MHz
+    RCC_ADCCLKConfig(RCC_PCLK2_Div16);  // ADC clock = 48MHz/16 = 3MHz (more stable)
 
     ADC_DeInit(ADC1);
     ADC_InitStructure.ADC_Mode = ADC_Mode_Independent;
@@ -360,11 +363,20 @@ void ADC_Init_Custom(void)
 
     ADC_Cmd(ADC1, ENABLE);
 
-    // ADC self-calibration
+    // Small delay for ADC to stabilize
+    Delay_Ms(10);
+
+    // ADC self-calibration with timeout protection
     ADC_ResetCalibration(ADC1);
-    while(ADC_GetResetCalibrationStatus(ADC1));
+    timeout = ADC_TIMEOUT;
+    while(ADC_GetResetCalibrationStatus(ADC1) && --timeout);
+
     ADC_StartCalibration(ADC1);
-    while(ADC_GetCalibrationStatus(ADC1));
+    timeout = ADC_TIMEOUT;
+    while(ADC_GetCalibrationStatus(ADC1) && --timeout);
+
+    // Additional stabilization delay
+    Delay_Ms(10);
 }
 
 /*===================================================================================
@@ -419,11 +431,15 @@ void Measure_VDD(void)
 
         // VDD = (Vref * ADC_MAX) / ADC_reading
         // VDD_mv = (1200 * 1024) / vref_raw
-        if(vref_raw > 100 && vref_raw < 400) {
+        // Valid range: At 3.3V: 1200/3300*1024=372, At 5.5V: 1200/5500*1024=223
+        // Extended range to handle variations
+        if(vref_raw > 50 && vref_raw < 600) {
             uint32_t vdd_calc = (uint32_t)VREF_INTERNAL_MV * ADC_RESOLUTION / vref_raw;
 
             if(vdd_calc >= VDD_MIN_MV && vdd_calc <= VDD_MAX_MV) {
                 actual_vdd_mv = (uint16_t)vdd_calc;
+            } else if(vdd_calc > VDD_MAX_MV) {
+                actual_vdd_mv = VDD_MAX_MV;  // Clamp high
             } else {
                 actual_vdd_mv = VDD_DEFAULT_MV;
             }
@@ -458,28 +474,53 @@ int32_t Kalman_Update(KalmanState *ks, int32_t measurement)
         return measurement;
     }
 
+    // Clamp P to prevent overflow
+    if(ks->p > KALMAN_P_MAX) ks->p = KALMAN_P_MAX;
+
     // Prediction: p_pred = p + q
     int32_t p_pred = ks->p + ks->q;
 
+    // Clamp p_pred to prevent overflow in gain calculation
+    if(p_pred > KALMAN_P_MAX) p_pred = KALMAN_P_MAX;
+
     // Kalman gain: k = p_pred / (p_pred + r)
     // Scale by 1000 for fixed-point division
-    ks->k = (p_pred * 1000) / (p_pred + ks->r);
+    // Safe calculation: max p_pred=50000, so 50000*1000=50M (fits in int32)
+    int32_t denominator = p_pred + ks->r;
+    if(denominator <= 0) denominator = 1;  // Safety check
+    ks->k = (p_pred * 1000) / denominator;
+
+    // Clamp Kalman gain to valid range [0, 1000]
+    if(ks->k < 0) ks->k = 0;
+    if(ks->k > 1000) ks->k = 1000;
 
     // Update estimate: x = x + k * (measurement - x) / 1000
     int32_t innovation = measurement - ks->x;
+
+    // Clamp innovation to prevent overflow
+    if(innovation > 500000) innovation = 500000;
+    if(innovation < -500000) innovation = -500000;
+
     ks->x = ks->x + (ks->k * innovation) / 1000;
+
+    // Clamp state estimate to valid range
+    if(ks->x < 0) ks->x = 0;
+    if(ks->x > 1000000) ks->x = 1000000;  // Max 1000V in mV
 
     // Update covariance: p = (1 - k/1000) * p_pred
     ks->p = ((1000 - ks->k) * p_pred) / 1000;
 
     // Prevent numeric instability
     if(ks->p < KALMAN_P_MIN) ks->p = KALMAN_P_MIN;
+    if(ks->p > KALMAN_P_MAX) ks->p = KALMAN_P_MAX;
 
     // Adaptive process noise based on innovation magnitude
     int32_t abs_innovation = (innovation < 0) ? -innovation : innovation;
 
     if(abs_innovation > KALMAN_INNOVATION_HIGH) {
         ks->q = KALMAN_Q_FAST;
+        // Also increase P for faster response to large changes
+        ks->p = KALMAN_P_RESET;
     } else if(abs_innovation > KALMAN_INNOVATION_MED) {
         ks->q = KALMAN_Q_MEDIUM;
     } else {
@@ -911,6 +952,38 @@ void ShowVoltageWithCalibration(uint8_t channel, uint16_t normal_ms, int16_t *of
 }
 
 /*===================================================================================
+ * Startup Display Test - Verify all segments work
+ *===================================================================================*/
+void Display_Test(void)
+{
+    uint8_t digit = 0;
+    uint8_t i;
+
+    // Test pattern: Show "888" to verify all segments
+    segPattern[0] = DIGIT_PAT[8];  // All segments on
+    segPattern[1] = DIGIT_PAT[8];
+    segPattern[2] = DIGIT_PAT[8];
+
+    // Display "888" for 500ms
+    for(i = 0; i < 80; i++) {
+        Display_Refresh(&digit);
+        Display_Refresh(&digit);
+        Display_Refresh(&digit);
+    }
+
+    // Show "---" briefly
+    segPattern[0] = PATTERN_DASH;
+    segPattern[1] = PATTERN_DASH;
+    segPattern[2] = PATTERN_DASH;
+
+    for(i = 0; i < 40; i++) {
+        Display_Refresh(&digit);
+        Display_Refresh(&digit);
+        Display_Refresh(&digit);
+    }
+}
+
+/*===================================================================================
  * Main Function
  *===================================================================================*/
 int main(void)
@@ -921,6 +994,10 @@ int main(void)
     SystemInit();
     Delay_Init();
     GPIO_Init_All();
+
+    // Run display test BEFORE ADC init (helps identify if display or ADC is the problem)
+    Display_Test();
+
     ADC_Init_Custom();
     Measure_VDD();
 
@@ -936,6 +1013,17 @@ int main(void)
 
     Delay_Ms(100);
 
+    // Initial readings to prime the Kalman filters
+    {
+        uint8_t i;
+        for(i = 0; i < 10; i++) {
+            ReadVoltage_Kalman(0);
+            ReadVoltage_Kalman(1);
+            IWDG_Feed();
+            Delay_Ms(10);
+        }
+    }
+
     // Main loop
     while(1) {
         IWDG_Feed();
@@ -950,13 +1038,19 @@ int main(void)
         UpdateDisplay_Label('O', 'P');
         DelayWithDisplay(LABEL_DISPLAY_MS);
 
+        IWDG_Feed();
         ShowVoltageWithCalibration(0, VOLTAGE_DISPLAY_MS, &cal_offset_out);
+
+        IWDG_Feed();
 
         // Display Input voltage
         UpdateDisplay_Label('I', 'P');
         DelayWithDisplay(LABEL_DISPLAY_MS);
 
+        IWDG_Feed();
         ShowVoltageWithCalibration(1, VOLTAGE_DISPLAY_MS, &cal_offset_in);
+
+        IWDG_Feed();
     }
 
     return 0;
